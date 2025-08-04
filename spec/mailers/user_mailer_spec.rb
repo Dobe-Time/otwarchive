@@ -1,6 +1,91 @@
 require "spec_helper"
 
 describe UserMailer do
+  describe "#change_email" do
+    let(:login) { "changer" }
+    let(:new_email) { "new@example.com" }
+    let(:user) { create(:user, login: login) }
+    subject(:email) { UserMailer.change_email(user.id, "old@example.com", new_email) }
+
+    # Test the headers
+    it_behaves_like "an email with a valid sender"
+
+    it "has the correct subject line" do
+      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] Email change request"
+      expect(email.subject).to eq(subject)
+    end
+
+    # Test both body contents
+    it_behaves_like "a multipart email"
+
+    it_behaves_like "a translated email"
+
+    describe "HTML version" do
+      it "has the correct content" do
+        expect(email).to have_html_part_content("Hi <b")
+        expect(email).to have_html_part_content(">#{login}</b>,")
+        expect(email).to have_html_part_content("If you made this request, check your email at <a")
+        expect(email).to have_html_part_content("#{new_email}</a> within #{ArchiveConfig.DAYS_UNTIL_RESET_PASSWORD_LINK_EXPIRES} days to confirm your email change")
+
+        expect(email).to have_html_part_content("don't understand why you received this email, please <a")
+        expect(email).to have_html_part_content(">contact Policy & Abuse</a>.")
+      end
+    end
+
+    describe "text version" do
+      it "has the correct content" do
+        expect(email).to have_text_part_content("Hi #{login},")
+        expect(email).to have_text_part_content("If you made this request, check your email at #{new_email} within #{ArchiveConfig.DAYS_UNTIL_RESET_PASSWORD_LINK_EXPIRES} days to confirm your email change")
+
+        expect(email).to have_text_part_content("If you don't understand why you received this email, please contact Policy & Abuse")
+      end
+    end
+  end
+
+  describe "#change_username" do
+    let(:old_username) { "olduser" }
+    let(:new_username) { "newuser" }
+    let(:user) { create(:user, login: new_username, renamed_at: Time.zone.parse("2025-01-01 00:00:00")) }
+    subject(:email) { UserMailer.change_username(user, old_username) }
+
+    before do
+      allow(ArchiveConfig).to receive(:USER_RENAME_LIMIT_DAYS).and_return(5)
+    end
+
+    # Test the headers
+    it_behaves_like "an email with a valid sender"
+
+    it "has the correct subject line" do
+      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] Your username has been changed"
+      expect(email.subject).to eq(subject)
+    end
+
+    # Test both body contents
+    it_behaves_like "a multipart email"
+
+    it_behaves_like "a translated email"
+
+    describe "HTML version" do
+      it "has the correct content" do
+        expect(email).to have_html_part_content("Hi,")
+        expect(email).to have_html_part_content(">#{old_username}</b> has been changed to <b style=\"color:#990000\">#{new_username}</b>")
+
+        expect(email).to have_html_part_content("can only be changed once every 5 days")
+        expect(email).to have_html_part_content("You will be able to change your username again on Mon, 06 Jan 2025 00:00:00 +0000")
+      end
+    end
+
+    describe "text version" do
+      it "has the correct content" do
+        expect(email).to have_text_part_content("Hi,")
+        expect(email).to have_text_part_content("#{old_username} has been changed to #{new_username}")
+
+        expect(email).to have_text_part_content("can only be changed once every 5 days")
+        expect(email).to have_text_part_content("You will be able to change your username again on Mon, 06 Jan 2025 00:00:00 +0000")
+      end
+    end
+  end
+
   describe "creatorship_request" do
     subject(:email) { UserMailer.creatorship_request(work_creatorship.id, author.id) }
 
@@ -25,7 +110,7 @@ describe UserMailer do
     it_behaves_like "an email with a valid sender"
 
     it "has the correct subject line" do
-      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] Co-creator request"
+      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] You've received a request to be a co-creator"
       expect(email).to have_subject(subject)
     end
 
@@ -49,22 +134,22 @@ describe UserMailer do
     end
   end
 
-  describe "creatorship_notification" do
-    subject(:email) { UserMailer.creatorship_notification(work_creatorship.id, author.id) }
+  describe "#creatorship_notification" do
+    subject(:email) { UserMailer.creatorship_notification(chapter_creatorship.id, author.id) }
 
     let(:author) { create(:user) }
     let(:second_author) { create(:user) }
-    let(:work) { create(:work, authors: [author.default_pseud, second_author.default_pseud]) }
-    let(:work_creatorship) { Creatorship.find_by(creation_id: work.id, pseud_id: second_author.default_pseud.id) }
+    let(:chapter) { create(:chapter, authors: [author.default_pseud, second_author.default_pseud]) }
+    let(:chapter_creatorship) { chapter.creatorships.last }
 
     context "when the creation is unavailable" do
-      before { work_creatorship.creation.delete }
+      before { chapter_creatorship.creation.delete }
 
       include_examples "it retries and fails on", ActionView::Template::Error
     end
 
     context "when the pseud being invited is unavailable" do
-      before { work_creatorship.pseud.delete }
+      before { chapter_creatorship.pseud.delete }
 
       include_examples "it retries and fails on", NoMethodError
     end
@@ -73,7 +158,7 @@ describe UserMailer do
     it_behaves_like "an email with a valid sender"
 
     it "has the correct subject line" do
-      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] Co-creator notification"
+      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] You've been added as a co-creator"
       expect(email).to have_subject(subject)
     end
 
@@ -121,7 +206,7 @@ describe UserMailer do
     it_behaves_like "an email with a valid sender"
 
     it "has the correct subject line" do
-      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] Archivist co-creator notification"
+      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] An archivist has added you as a co-creator"
       expect(email).to have_subject(subject)
     end
 
@@ -149,7 +234,7 @@ describe UserMailer do
     title = "Façade"
     title2 = Faker::Book.title
 
-    subject(:email) { UserMailer.claim_notification(author.id, [work.id, work2.id], true) }
+    subject(:email) { UserMailer.claim_notification(author.id, [work.id, work2.id]) }
 
     let(:author) { create(:user) }
     let(:work) { create(:work, title: title, authors: [author.pseuds.first]) }
@@ -200,7 +285,7 @@ describe UserMailer do
       end
 
       it "lists the second imported work with a leading hyphen" do
-        expect(email).to have_text_part_content("- #{title2}")
+        expect(email).to have_text_part_content("- \"#{title2}\"")
       end
 
       it "displays titles with non-ASCII characters" do
@@ -292,7 +377,7 @@ describe UserMailer do
       end
 
       it "lists the second imported work with a leading hyphen" do
-        expect(email).to have_text_part_content("- #{title2}")
+        expect(email).to have_text_part_content("- \"#{title2}\"")
       end
     end
   end
@@ -377,7 +462,7 @@ describe UserMailer do
     let!(:collection) { create(:collection, challenge: gift_exchange, challenge_type: "GiftExchange") }
     let!(:otheruser) { create(:user) }
     let!(:offer) { create(:challenge_signup, collection: collection, pseud: otheruser.default_pseud) }
-    let!(:open_assignment) { create(:challenge_assignment, collection: collection, offer_signup: offer) }
+    let!(:open_assignment) { create(:challenge_assignment, collection: collection, offer_signup: offer, sent_at: Time.current) }
 
     # Test the headers
     it_behaves_like "an email with a valid sender"
@@ -603,7 +688,7 @@ describe UserMailer do
   end
 
   describe "admin_hidden_work_notification" do
-    subject(:email) { UserMailer.admin_hidden_work_notification(work.id, user.id) }
+    subject(:email) { UserMailer.admin_hidden_work_notification([work.id], user.id) }
 
     let(:user) { create(:user) }
     let(:work) { create(:work, authors: [user.pseuds.first]) }
@@ -612,7 +697,7 @@ describe UserMailer do
     it_behaves_like "an email with a valid sender"
 
     it "has the correct subject line" do
-      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] Your work has been hidden by the Policy & Abuse team"
+      subject = "[#{ArchiveConfig.APP_SHORT_NAME}] Your work has been hidden by the Policy & Abuse committee"
       expect(email.subject).to eq(subject)
     end
 
@@ -623,7 +708,7 @@ describe UserMailer do
 
     describe "HTML version" do
       it "has the correct content" do
-        expect(email).to have_html_part_content("Dear <b")
+        expect(email).to have_html_part_content("Hi <b")
         expect(email).to have_html_part_content("#{user.login}</b>,")
         expect(email).to have_html_part_content("> has been hidden")
       end
@@ -631,7 +716,7 @@ describe UserMailer do
 
     describe "text version" do
       it "has the correct content" do
-        expect(email).to have_text_part_content("Dear #{user.login},")
+        expect(email).to have_text_part_content("Hi #{user.login},")
         expect(email).to have_text_part_content(") has been hidden")
       end
     end
@@ -678,11 +763,12 @@ describe UserMailer do
       end
 
       it "formats the date rightfully in French" do
-        I18n.locale = "fr"
-        travel_to "2022-03-14 13:27:09 +0000" do
-          expect(email).to have_html_part_content("Envoyé le 14 mars 2022 13h 27min 09s.")
-          expect(email).to have_text_part_content("Envoyé le 14 mars 2022 13h 27min 09s.")
-        end
+        I18n.with_locale("fr") do
+          travel_to "2022-03-14 13:27:09 +0000" do
+            expect(email).to have_html_part_content("Envoyé le 14 mars 2022 13h 27min 09s.")
+            expect(email).to have_text_part_content("Envoyé le 14 mars 2022 13h 27min 09s.")
+          end
+        end 
       end
     end
   end
@@ -775,7 +861,7 @@ describe UserMailer do
 
     describe "HTML version" do
       it "has the correct content" do
-        expect(email).to have_html_part_content("Dear <b")
+        expect(email).to have_html_part_content("Hi <b")
         expect(email).to have_html_part_content("#{user.login}</b>,")
         expect(email).to have_html_part_content("> has been flagged by our automated system")
       end
@@ -783,7 +869,7 @@ describe UserMailer do
 
     describe "text version" do
       it "has the correct content" do
-        expect(email).to have_text_part_content("Dear #{user.login},")
+        expect(email).to have_text_part_content("Hi #{user.login},")
         expect(email).to have_text_part_content(") has been flagged by our automated system")
       end
     end
@@ -811,14 +897,14 @@ describe UserMailer do
 
     describe "HTML version" do
       it "has the correct content" do
-        expect(email).to have_html_part_content("Dear <b")
+        expect(email).to have_html_part_content("Hi <b")
         expect(email).to have_html_part_content("#{user.login}</b>,")
       end
     end
 
     describe "text version" do
       it "has the correct content" do
-        expect(email).to have_text_part_content("Dear #{user.login},")
+        expect(email).to have_text_part_content("Hi #{user.login},")
       end
     end
   end
@@ -847,7 +933,7 @@ describe UserMailer do
 
     describe "HTML version" do
       it "has the correct content" do
-        expect(email).to have_html_part_content("Dear <b")
+        expect(email).to have_html_part_content("Hi <b")
         expect(email).to have_html_part_content("#{user.login}</b>,")
         expect(email).to have_html_part_content(collection.title)
         expect(email).to have_html_part_content(work.title)
@@ -856,7 +942,7 @@ describe UserMailer do
 
     describe "text version" do
       it "has the correct content" do
-        expect(email).to have_text_part_content("Dear #{user.login},")
+        expect(email).to have_text_part_content("Hi #{user.login},")
         expect(email).to have_text_part_content(collection.title)
         expect(email).to have_text_part_content(work.title)
       end
@@ -933,7 +1019,7 @@ describe UserMailer do
   end
 
   describe "potential_match_generation_notification" do
-    subject(:email) { UserMailer.potential_match_generation_notification(collection.id) }
+    subject(:email) { UserMailer.potential_match_generation_notification(collection.id, "test@example.com") }
 
     let(:collection) { create(:collection) }
 
@@ -952,21 +1038,41 @@ describe UserMailer do
 
     describe "HTML version" do
       it "has the correct content" do
-        expect(email).to have_html_part_content("potential assignments for your challenge collection, <")
-        expect(email).to have_html_part_content("challenge's <")
+        expect(email).to have_html_part_content("potential assignments for your gift exchange <")
+        expect(email).to have_html_part_content("on its <")
       end
     end
 
     describe "text version" do
       it "has the correct content" do
-        expect(email).to have_text_part_content("potential assignments for your challenge collection \"#{collection.title}\"")
-        expect(email).to have_text_part_content("challenge's Matching page:")
+        expect(email).to have_text_part_content("potential assignments for your gift exchange \"#{collection.title}\"")
+        expect(email).to have_text_part_content("on its Matching page:")
+      end
+    end
+  end
+
+  describe "potential_match_generation_notification_collection_email" do
+    subject(:email) { UserMailer.potential_match_generation_notification(collection.id, collection.collection_email) }
+
+    let(:collection) { create(:collection) }
+
+    it_behaves_like "an email with a valid sender"
+
+    describe "HTML version" do
+      it "has the correct footer content" do
+        expect(email).to have_html_part_content("your email address has been listed as the collection email")
+      end
+    end
+
+    describe "text version" do
+      it "has the correct footer content" do
+        expect(email).to have_text_part_content("your email address has been listed as the collection email")
       end
     end
   end
 
   describe "invalid_signup_notification" do
-    subject(:email) { UserMailer.invalid_signup_notification(collection.id, [signup.id]) }
+    subject(:email) { UserMailer.invalid_signup_notification(collection.id, [signup.id], "test@example.com") }
 
     let(:collection) { create(:collection) }
     let(:signup) { create(:challenge_signup) }
@@ -986,19 +1092,40 @@ describe UserMailer do
 
     describe "HTML version" do
       it "has the correct content" do
-        expect(email).to have_html_part_content("invalid sign-ups in your challenge <")
+        expect(email).to have_html_part_content("invalid sign-ups in your gift exchange <")
       end
     end
 
     describe "text version" do
       it "has the correct content" do
-        expect(email).to have_text_part_content("invalid sign-ups in your challenge \"#{collection.title}\"")
+        expect(email).to have_text_part_content("invalid sign-ups in your gift exchange \"#{collection.title}\"")
+      end
+    end
+  end
+
+  describe "invalid_signup_notification_collection_email" do
+    subject(:email) { UserMailer.invalid_signup_notification(collection.id, [signup.id], collection.collection_email) }
+
+    let(:collection) { create(:collection) }
+    let(:signup) { create(:challenge_signup) }
+
+    it_behaves_like "an email with a valid sender"
+
+    describe "HTML version" do
+      it "has the correct footer content" do
+        expect(email).to have_html_part_content("your email address has been listed as the collection email")
+      end
+    end
+
+    describe "text version" do
+      it "has the correct footer content" do
+        expect(email).to have_text_part_content("your email address has been listed as the collection email")
       end
     end
   end
 
   describe "collection_notification" do
-    subject(:email) { UserMailer.collection_notification(collection.id, subject_text, message_text) }
+    subject(:email) { UserMailer.collection_notification(collection.id, subject_text, message_text, "test@example.com") }
 
     let(:collection) { create(:collection) }
     let(:subject_text) { Faker::Hipster.sentence }
@@ -1100,7 +1227,7 @@ describe UserMailer do
   end
 
   describe "delete_work_notification" do
-    subject(:email) { UserMailer.delete_work_notification(user, work) }
+    subject(:email) { UserMailer.delete_work_notification(user, work, user) }
 
     let(:user) { create(:user) }
     let(:work) { create(:work) }
@@ -1124,7 +1251,7 @@ describe UserMailer do
 
     context "HTML version" do
       it "has the correct content" do
-        expect(email).to have_html_part_content("Dear <b")
+        expect(email).to have_html_part_content("Hi <b")
         expect(email).to have_html_part_content("#{user.login}</b>,")
         expect(email).to have_html_part_content("was deleted at your request")
       end
@@ -1132,7 +1259,7 @@ describe UserMailer do
 
     context "text version" do
       it "has the correct content" do
-        expect(email).to have_text_part_content("Dear #{user.login},")
+        expect(email).to have_text_part_content("Hi #{user.login},")
         expect(email).to have_text_part_content("Your work \"#{work.title}\" was deleted at your request")
       end
     end
@@ -1177,7 +1304,7 @@ describe UserMailer do
 
     context "HTML version" do
       it "has the correct content" do
-        expect(email).to have_html_part_content("Dear <b")
+        expect(email).to have_html_part_content("Hi <b")
         expect(email).to have_html_part_content("#{user.login}</b>,")
         expect(email).to have_html_part_content("was deleted from the Archive by a site admin")
       end
@@ -1185,7 +1312,7 @@ describe UserMailer do
 
     context "text version" do
       it "has the correct content" do
-        expect(email).to have_text_part_content("Dear #{user.login},")
+        expect(email).to have_text_part_content("Hi #{user.login},")
         expect(email).to have_text_part_content("Your work \"#{work.title}\" was deleted from the Archive by a site admin")
       end
     end
@@ -1202,56 +1329,6 @@ describe UserMailer do
       end
 
       it_behaves_like "an email with a deleted work with draft chapters attached"
-    end
-  end
-
-  describe "obeys the set locale preference feature flag" do
-    let(:user) { create(:user) }
-    let(:work) { create(:work, authors: [user.default_pseud]) }
-    let(:locale) { create(:locale) }
-
-    context "when the set locale preference feature flag is on" do
-      before { $rollout.activate_user(:set_locale_preference, user) }
-
-      context "and the user has non-default locale set" do
-        before { user.preference.update!(locale: locale) }
-
-        it "sends a localised email" do
-          expect(I18n).to receive(:with_locale).with(locale.iso)
-          expect(UserMailer.admin_hidden_work_notification(work.id, user.id)).to be_truthy
-        end
-      end
-
-      context "and the user has the default locale set" do
-        before { user.preference.update!(locale: Locale.default) }
-
-        it "sends an English email" do
-          expect(I18n).to receive(:with_locale).with("en")
-          expect(UserMailer.admin_hidden_work_notification(work.id, user.id)).to be_truthy
-        end
-      end
-    end
-
-    context "when the set locale preference feature flag is off" do
-      before { $rollout.deactivate_user(:set_locale_preference, user) }
-
-      context "and the user has non-default locale set" do
-        before { user.preference.update!(locale: locale) }
-
-        it "sends an English email" do
-          expect(I18n).to receive(:with_locale).with("en")
-          expect(UserMailer.admin_hidden_work_notification(work.id, user.id)).to be_truthy
-        end
-      end
-
-      context "and the user has the default locale set" do
-        before { user.preference.update!(locale: Locale.default) }
-
-        it "sends an English email" do
-          expect(I18n).to receive(:with_locale).with("en")
-          expect(UserMailer.admin_hidden_work_notification(work.id, user.id)).to be_truthy
-        end
-      end
     end
   end
 end

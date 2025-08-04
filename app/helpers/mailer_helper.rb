@@ -155,7 +155,7 @@ module MailerHelper
     end
   end
 
-  def work_metadata_label(text)
+  def metadata_label(text)
     text.html_safe + t("mailer.general.metadata_label_indicator")
   end
 
@@ -166,10 +166,8 @@ module MailerHelper
     "#{work_tag_metadata_label(tags)}#{work_tag_metadata_list(tags)}"
   end
 
-  # TODO: We're using this for labels in set_password_notification, too. Let's
-  # take the "work" out of the name.
-  def style_work_metadata_label(text)
-    style_bold(work_metadata_label(text))
+  def style_metadata_label(text)
+    style_bold(metadata_label(text))
   end
 
   # Spacing is dealt with in locale files, e.g. " : " for French.
@@ -200,6 +198,28 @@ module MailerHelper
     else
       role = comment.user.official ? t("roles.official_with_parens") : t("roles.registered_with_parens")
       t("roles.commenter_name.text", name: text_pseud(comment.pseud), role_with_parens: role)
+    end
+  end
+
+  def collection_footer_note_html(is_collection_email, collection)
+    if is_collection_email
+      t("mailer.collections.why_collection_email.html",
+        collection_link: style_footer_link(collection.title, collection_url(collection)))
+    else
+      t("mailer.collections.why_maintainer.html",
+        collection_link: style_footer_link(collection.title, collection_url(collection)))
+    end
+  end
+
+  def collection_footer_note_text(is_collection_email, collection)
+    if is_collection_email
+      t("mailer.collections.why_collection_email.text",
+        collection_title: collection.title,
+        collection_url: collection_url(collection))
+    else
+      t("mailer.collections.why_maintainer.text",
+        collection_title: collection.title,
+        collection_url: collection_url(collection))
     end
   end
 

@@ -22,24 +22,23 @@ module ApplicationHelper
     show_sidebar = ((@user || @admin_posts || @collection || show_wrangling_dashboard) && !@hide_dashboard)
     class_names += " dashboard" if show_sidebar
 
-    if page_has_filters?
-      class_names += " filtered"
-    end
+    class_names += " filtered" if page_has_filters?
 
-    if %w(abuse_reports feedbacks known_issues).include?(controller.controller_name)
-      class_names = "system support " + controller.controller_name + ' ' + controller.action_name
-    end
-    if controller.controller_name == "archive_faqs"
-      class_names = "system docs support faq " + controller.action_name
-    end
-    if controller.controller_name == "wrangling_guidelines"
-      class_names = "system docs guideline " + controller.action_name
-    end
-    if controller.controller_name == "home"
-      class_names = "system docs " + controller.action_name
-    end
-    if controller.controller_name == "errors"
-      class_names = "system " + controller.controller_name + " error-" + controller.action_name
+    case controller.controller_name
+    when "abuse_reports", "feedbacks", "known_issues"
+      class_names = "system support #{controller.controller_name} #{controller.action_name}"
+    when "archive_faqs"
+      class_names = "system docs support faq #{controller.action_name}"
+    when "wrangling_guidelines"
+      class_names = "system docs guideline #{controller.action_name}"
+    when "home"
+      class_names = if %w(content privacy).include?(controller.action_name)
+                      "system docs tos tos-#{controller.action_name}"
+                    else
+                      "system docs #{controller.action_name}"
+                    end
+    when "errors"
+      class_names = "system #{controller.controller_name} error-#{controller.action_name}"
     end
 
     class_names
@@ -253,20 +252,24 @@ module ApplicationHelper
   end
 
   # expand/contracts all expand/contract targets inside its nearest parent with the target class (usually index or listbox etc)
-  def expand_contract_all(target="index")
-    expand_all = content_tag(:a, ts("Expand All"), href: "#", class: "expand_all", "target_class" => target, role: "button")
-    contract_all = content_tag(:a, ts("Contract All"), href: "#", class: "contract_all", "target_class" => target, role: "button")
-    content_tag(:span, expand_all + "\n".html_safe + contract_all, class: "actions hidden showme", role: "menu")
+  def expand_contract_all(target = "listbox")
+    expand_all = button_tag(ts("Expand All"), class: "expand_all", data: { target_class: target })
+    contract_all = button_tag(ts("Contract All"), class: "contract_all", data: { target_class: target })
+
+    expand_all + contract_all
   end
 
   # Sets up expand/contract/shuffle buttons for any list whose id is passed in
   # See the jquery code in application.js
   # Note that these start hidden because if javascript is not available, we
   # don't want to show the user the buttons at all.
-  def expand_contract_shuffle(list_id, shuffle=true)
-    ('<span class="action expand hidden" title="expand" action_target="#' + list_id + '"><a href="#" role="button">&#8595;</a></span>
-    <span class="action contract hidden" title="contract" action_target="#' + list_id + '"><a href="#" role="button">&#8593;</a></span>').html_safe +
-    (shuffle ? ('<span class="action shuffle hidden" title="shuffle" action_target="#' + list_id + '"><a href="#" role="button">&#8646;</a></span>') : '').html_safe
+  def expand_contract_shuffle(list_id, shuffle: true)
+    target = "##{list_id}"
+    expander = button_tag("&#8595;".html_safe, class: "expand hidden", title: "expand", data: { action_target: target })
+    contractor = button_tag("&#8593;".html_safe, class: "contract hidden", title: "contract", data: { action_target: target })
+    shuffler = button_tag("&#8646;".html_safe, class: "shuffle hidden", title: "shuffle", data: { action_target: target }) if shuffle
+
+    expander + contractor + shuffler
   end
 
   # returns the default autocomplete attributes, all of which can be overridden
@@ -517,18 +520,6 @@ module ApplicationHelper
     end
   end
 
-  # change the default link renderer for will_paginate
-  def will_paginate(collection_or_options = nil, options = {})
-    if collection_or_options.is_a? Hash
-      options = collection_or_options
-      collection_or_options = nil
-    end
-    unless options[:renderer]
-      options = options.merge renderer: PaginationListLinkRenderer
-    end
-    super(*[collection_or_options, options].compact)
-  end
-
   # spans for nesting a checkbox or radio button inside its label to make custom
   # checkbox or radio designs
   def label_indicator_and_text(text)
@@ -566,7 +557,7 @@ module ApplicationHelper
     # series.
     return [] if creation.is_a?(Work) && creation.unrevealed?
 
-    creation.users.pluck(:id).uniq.map { |id| "user-#{id}" }
+    creation.pseuds.pluck(:user_id).uniq.map { |id| "user-#{id}" }
   end
 
   def css_classes_for_creation_blurb(creation)
@@ -631,4 +622,33 @@ module ApplicationHelper
       item.users.all? { |u| u&.preference&.minimize_search_engines? }
     end
   end
-end # end of ApplicationHelper
+
+  # Determines if the page (controller and action combination) does not need
+  # to show the ToS (Terms of Service) popup.
+  def tos_exempt_page?
+    case params[:controller]
+    when "home"
+      %w[index content dmca privacy tos tos_faq].include?(params[:action])
+    when "abuse_reports", "feedbacks", "users/sessions"
+      %w[new create].include?(params[:action])
+    when "archive_faqs"
+      %w[index show].include?(params[:action])
+    end
+  end
+
+  def browser_page_title(page_title, page_subtitle)
+    return page_title if page_title
+
+    page = if page_subtitle
+             page_subtitle
+           elsif controller.action_name == "index"
+             process_title(controller.controller_name)
+           else
+             "#{process_title(controller.action_name)} #{process_title(controller.controller_name.singularize)}"
+           end
+    # page_subtitle sometimes contains user (including admin) content, so let's
+    # not html_safe the entire string. Let's require html_safe be called when
+    # we set @page_subtitle, so we're conscious of what we're doing.
+    page + " | #{ArchiveConfig.APP_NAME}"
+  end
+end

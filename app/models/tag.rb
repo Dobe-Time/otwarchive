@@ -172,6 +172,9 @@ class Tag < ApplicationRecord
   validates :name,
             format: { with: /\A[^,，、*<>^{}=`\\%]+\z/,
                       message: "^Tag name '%{value}' cannot include the following restricted characters: , &#94; * < > { } = ` ， 、 \\ %" }
+  validates :name,
+            format: { without: /\A\p{Cf}+\z/,
+                      message: "^Tag name cannot be blank." }
   validates :sortable_name, presence: true
 
   validate :unwrangleable_status
@@ -224,6 +227,21 @@ class Tag < ApplicationRecord
   def flush_work_cache
     self.work_ids.each do |work|
       Work.expire_work_blurb_version(work)
+    end
+  end
+
+  # queue_flush_work_cache will update the cached work (bookmarkable) info for
+  # bookmarks, but we still need to expire the portion of bookmark blurbs that
+  # contains the bookmarker's tags.
+  after_update :queue_flush_bookmark_cache
+  def queue_flush_bookmark_cache
+    async_after_commit(:flush_bookmark_cache) if saved_change_to_name?
+  end
+
+  def flush_bookmark_cache
+    self.bookmarks.each do |bookmark|
+      ActionController::Base.new.expire_fragment("bookmark-owner-blurb-#{bookmark.cache_key}-v3")
+      ActionController::Base.new.expire_fragment("bookmark-blurb-#{bookmark.cache_key}-v3")
     end
   end
 
@@ -564,7 +582,18 @@ class Tag < ApplicationRecord
   # Substitute characters that are particularly prone to cause trouble in urls
   def self.find_by_name(string)
     return unless string.is_a? String
-    string = string.gsub(
+
+    self.find_by(name: from_param(string))
+  end
+
+  def self.find_by_name!(string)
+    return unless string.is_a? String
+
+    self.find_by!(name: from_param(string))
+  end
+
+  def self.from_param(string)
+    string.gsub(
       /\*[sadqh]\*/,
       '*s*' => '/',
       '*a*' => '&',
@@ -572,7 +601,6 @@ class Tag < ApplicationRecord
       '*q*' => '?',
       '*h*' => '#'
     )
-    self.where('tags.name = ?', string).first
   end
 
   # If a tag by this name exists in another class, add a suffix to disambiguate them
@@ -615,9 +643,9 @@ class Tag < ApplicationRecord
     !(self.canonical? || self.unwrangleable? || self.merger_id.present? || self.mergers.any?)
   end
 
-  # Returns true if a tag has been used in posted works
-  def has_posted_works?
-    self.works.posted.any?
+  # Returns true if a tag has been used in posted works that are revealed and not hidden
+  def has_posted_works? # rubocop:disable Naming/PredicateName
+    self.works.posted.revealed.unhidden.any?
   end
 
   # sort tags by name
@@ -1050,14 +1078,15 @@ class Tag < ApplicationRecord
   #################################
 
   def unwrangled_query(tag_type, options = {})
-    self_type = %w(Character Fandom Media).include?(self.type) ? self.type.downcase : "fandom"
+    self_type = %w[Character Fandom Media].include?(self.type) ? self.type.downcase : "fandom"
     TagQuery.new(options.merge(
-      type: tag_type,
-      unwrangleable: false,
-      wrangled: false,
-      "pre_#{self_type}_ids": [self.id],
-      per_page: Tag.per_page
-    ))
+                   type: tag_type,
+                   unwrangleable: false,
+                   wrangled: false,
+                   has_posted_works: true,
+                   "pre_#{self_type}_ids": [self.id],
+                   per_page: Tag.per_page
+                 ))
   end
 
   def unwrangled_tags(tag_type, options = {})
@@ -1177,17 +1206,29 @@ class Tag < ApplicationRecord
       exists: true
     )
 
-    # Calculate the fandoms associated with this tag, because we'll set any
-    # TagNominations with a matching parent_tagname to have parented: true.
-    parent_names = parents.where(type: "Fandom").pluck(:name)
+    if canonical?
+      # Calculate the fandoms associated with this tag, because we'll set any
+      # TagNominations with a matching parent_tagname to have parented: true.
+      parent_names = parents.where(type: "Fandom").pluck(:name)
 
-    # If this tag has any fandoms at all, we also want to count it as parented
-    # for nominations with a blank parent_tagname. See the set_parented
-    # function in TagNominations for the calculation that we're trying to mimic
-    # here.
-    parent_names << "" if parent_names.present?
+      # If this tag has any fandoms at all, we also want to count it as parented
+      # for nominations with a blank parent_tagname. See the set_parented
+      # function in TagNominations for the calculation that we're trying to mimic
+      # here.
+      parent_names << "" if parent_names.present?
 
-    TagNomination.where(tagname: name, parent_tagname: parent_names).update_all(parented: true)
+      TagNomination.where(tagname: name, parent_tagname: parent_names).update_all(parented: true)
+    end
+
+    return unless saved_change_to_name? && name_before_last_save.present?
+
+    # Act as if the tag with the previous name was deleted and mirror clear_tag_nominations
+    TagNomination.where(tagname: name_before_last_save).update_all(
+      canonical: false,
+      exists: false,
+      parented: false,
+      synonym: nil
+    )
   end
 
   before_destroy :clear_tag_nominations

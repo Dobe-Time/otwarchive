@@ -13,6 +13,7 @@ class WorksController < ApplicationController
   # admins should have the ability to edit tags (:edit_tags, :update_tags) as per our ToS
   before_action :check_ownership_or_admin, only: [:edit_tags, :update_tags]
   before_action :log_admin_activity, only: [:update_tags]
+  before_action :check_parent_visible, only: [:navigate]
   before_action :check_visibility, only: [:show, :navigate, :share, :mark_for_later, :mark_as_read]
 
   before_action :load_first_chapter, only: [:show, :edit, :update, :preview]
@@ -56,12 +57,11 @@ class WorksController < ApplicationController
 
     options = params[:work_search].present? ? clean_work_search_params : {}
 
-    if params[:fandom_id] || (@collection.present? && @tag.present?)
-      if params[:fandom_id].present?
-        @fandom = Fandom.find_by(id: params[:fandom_id])
-      end
+    if params[:fandom_id].present? || (@collection.present? && @tag.present?)
+      @fandom = Fandom.find(params[:fandom_id]) if params[:fandom_id]
 
       tag = @fandom || @tag
+
       options[:filter_ids] ||= []
       options[:filter_ids] << tag.id
     end
@@ -117,7 +117,7 @@ class WorksController < ApplicationController
       flash_search_warnings(@works)
 
       @facets = @works.facets
-      if @search.options[:excluded_tag_ids].present?
+      if @search.options[:excluded_tag_ids].present? && @facets
         tags = Tag.where(id: @search.options[:excluded_tag_ids])
         tags.each do |tag|
           @facets[tag.class.to_s.underscore] ||= []
@@ -132,6 +132,8 @@ class WorksController < ApplicationController
       @works = Work.latest.for_blurb.to_a
     end
     set_own_works
+
+    @pagy = pagy_query_result(@works) if @works.respond_to?(:total_pages)
   end
 
   def collected
@@ -160,6 +162,8 @@ class WorksController < ApplicationController
       redirect_to logged_in? ? user_path(current_user) : new_user_session_path
       return
     end
+    
+    @page_subtitle = t(".page_title", username: @user.login)
 
     if params[:pseud_id]
       @pseud = @user.pseuds.find_by(name: params[:pseud_id])
@@ -174,7 +178,7 @@ class WorksController < ApplicationController
   def show
     @tag_groups = @work.tag_groups
     if @work.unrevealed?
-      @page_title = ts("Mystery Work")
+      @page_subtitle = t(".page_title.unrevealed")
     else
       page_creator = if @work.anonymous?
                        ts("Anonymous")
@@ -309,8 +313,7 @@ class WorksController < ApplicationController
     @work.set_challenge_claim_info
     set_work_form_fields
 
-    # If Edit or Cancel is pressed, bail out and display relevant form
-    if params[:edit_button] || work_cannot_be_saved?
+    if work_cannot_be_saved?
       render :new
     else
       @work.posted = @chapter.posted = true if params[:post_button]
@@ -392,7 +395,6 @@ class WorksController < ApplicationController
       @work.set_revised_at_by_chapter(@chapter)
       posted_changed = @work.posted_changed?
 
-      @work.minor_version = @work.minor_version + 1
       if @chapter.save && @work.save
         flash[:notice] = ts("Work was successfully #{posted_changed ? 'posted' : 'updated'}.")
         if posted_changed
@@ -634,7 +636,9 @@ class WorksController < ApplicationController
 
     # AO3-3498: since a work's word count is calculated in a before_save and the chapter is posted in an after_save,
     # work's word count needs to be updated with the chapter's word count after the chapter is posted
-    @work.set_word_count
+    # AO3-6273 Cannot rely on set_word_count here in a production environment, as it might query an older version of the database
+    # Instead, as the work in this context is reduced its first chapter, we copy the value directly
+    @work.word_count = @work.first_chapter.word_count
     @work.save
 
     if !@collection.nil? && @collection.moderated?
@@ -651,11 +655,7 @@ class WorksController < ApplicationController
     @page_subtitle = ts("Edit Multiple Works")
     @user = current_user
 
-    if params[:pseud_id]
-      @works = Work.joins(:pseuds).where(pseud_id: params[:pseud_id])
-    else
-      @works = Work.joins(pseuds: :user).where('users.id = ?', @user.id)
-    end
+    @works = Work.joins(pseuds: :user).where(users: { id: @user.id })
 
     @works = @works.where(id: params[:work_ids]) if params[:work_ids]
 
@@ -788,6 +788,10 @@ class WorksController < ApplicationController
     @check_visibility_of = @work
   end
 
+  def check_parent_visible
+    check_visibility_for(@work)
+  end
+
   def load_first_chapter
     @chapter = if @work.user_is_owner_or_invited?(current_user) || logged_in_as_admin?
                  @work.first_chapter
@@ -898,7 +902,7 @@ class WorksController < ApplicationController
       external_coauthor_name: params[:external_coauthor_name],
       external_coauthor_email: params[:external_coauthor_email],
       language_id: params[:language_id]
-    }
+    }.compact_blank!
   end
 
   def work_params

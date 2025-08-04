@@ -554,7 +554,11 @@ class StoryParser
     # Encode as HTML - the dummy "foo" tag will be stripped out by the sanitizer but forces Nokogiri to
     # preserve line breaks in plain text documents
     # Rescue all errors as Nokogiri complains about things the sanitizer will fix later
-    @doc = Nokogiri::HTML.parse(story.prepend("<foo/>"), nil, encoding) rescue ""
+    begin
+      @doc = Nokogiri::HTML.parse(story.prepend("<foo/>"), encoding: encoding)
+    rescue StandardError
+      @doc = ""
+    end
 
     # Try to convert all relative links to absolute
     base = @doc.at_css("base") ? @doc.css("base")[0]["href"] : location.split("?").first
@@ -612,6 +616,7 @@ class StoryParser
     # inside the body.
     body = @doc.css("body")
     storytext = body.css("article.b-singlepost-body").inner_html
+    storytext = body.css("div.aentry-post__text").inner_html if storytext.empty?
     storytext = body.inner_html if storytext.empty?
 
     # cleanup the text
@@ -624,9 +629,8 @@ class StoryParser
     work_params.merge!(scan_text_for_meta(storytext, detect_tags))
 
     date = @doc.css("time.b-singlepost-author-date")
-    unless date.empty?
-      work_params[:revised_at] = convert_revised_at(date.first.inner_text)
-    end
+    date = @doc.css("p.aentry-head__date/time") if date.empty?
+    work_params[:revised_at] = convert_revised_at(date.first.inner_text) unless date.empty?
 
     work_params
   end
@@ -799,13 +803,17 @@ class StoryParser
         # we do a little cleanup here in case the user hasn't included the 'http://'
         # or if they've used capital letters or an underscore in the hostname
         uri = UrlFormatter.new(location).standardized
+        raise Error, I18n.t("story_parser.on_archive") if ArchiveConfig.PERMITTED_HOSTS.include?(uri.host)
+
         response = Net::HTTP.get_response(uri)
         case response
         when Net::HTTPSuccess
           story = response.body
         when Net::HTTPRedirection
           if limit.positive?
-            story = download_with_timeout(response['location'], limit - 1)
+            new_uri = URI.parse(response["location"])
+            new_uri = URI.join(uri, new_uri) if new_uri.relative?
+            story = download_with_timeout(new_uri.to_s, limit - 1)
           end
         else
           Rails.logger.error("------- STORY PARSER: download_with_timeout: response is not success or redirection ------")

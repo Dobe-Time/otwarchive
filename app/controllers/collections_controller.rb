@@ -1,10 +1,10 @@
 class CollectionsController < ApplicationController
-
   before_action :users_only, only: [:new, :edit, :create, :update]
   before_action :load_collection_from_id, only: [:show, :edit, :update, :destroy, :confirm_delete]
   before_action :collection_owners_only, only: [:edit, :update, :destroy, :confirm_delete]
   before_action :check_user_status, only: [:new, :create, :edit, :update, :destroy]
   before_action :validate_challenge_type
+  before_action :check_parent_visible, only: [:index]
   cache_sweeper :collection_sweeper
 
   # Lazy fix to prevent passing unsafe values to eval via challenge_type
@@ -23,22 +23,34 @@ class CollectionsController < ApplicationController
     end
   end
 
+  def check_parent_visible
+    return unless params[:work_id] && (@work = Work.find_by(id: params[:work_id]))
+
+    check_visibility_for(@work)
+  end
+
   def index
-    if params[:work_id] && (@work = Work.find_by(id: params[:work_id]))
-      @collections = @work.approved_collections.by_title.includes(:parent, :moderators, :children, :collection_preference, owners: [:user]).paginate(page: params[:page])
-    elsif params[:collection_id] && (@collection = Collection.find_by(name: params[:collection_id]))
-      @collections = @collection.children.by_title.includes(:parent, :moderators, :children, :collection_preference, owners: [:user]).paginate(page: params[:page])
-    elsif params[:user_id] && (@user = User.find_by(login: params[:user_id]))
-      @collections = @user.maintained_collections.by_title.includes(:parent, :moderators, :children, :collection_preference, owners: [:user]).paginate(page: params[:page])
+    if params[:work_id]
+      @work = Work.find(params[:work_id])
+      @collections = @work.approved_collections
+        .by_title
+        .for_blurb
+        .paginate(page: params[:page])
+    elsif params[:collection_id]
+      @collection = Collection.find_by!(name: params[:collection_id])
+      @collections = @collection.children
+        .by_title
+        .for_blurb
+        .paginate(page: params[:page])
+      @page_subtitle = t(".subcollections_page_title", collection_title: @collection.title)
+    elsif params[:user_id]
+      @user = User.find_by!(login: params[:user_id])
+      @collections = @user.maintained_collections
+        .by_title
+        .for_blurb
+        .paginate(page: params[:page])
       @page_subtitle = ts("%{username} - Collections", username: @user.login)
     else
-      if params[:user_id]
-        flash.now[:error] = ts("We couldn't find a user by that name, sorry.")
-      elsif params[:collection_id]
-        flash.now[:error] = ts("We couldn't find a collection by that name.")
-      elsif params[:work_id]
-        flash.now[:error] = ts("We couldn't find that work.")
-      end
       @sort_and_filter = true
       params[:collection_filters] ||= {}
       params[:sort_column] = "collections.created_at" if !valid_sort_column(params[:sort_column], 'collection')

@@ -2,7 +2,7 @@ class AutocompleteController < ApplicationController
   respond_to :json
 
   skip_before_action :store_location
-  skip_before_action :set_current_user, except: [:collection_parent_name, :owned_tag_sets, :site_skins]
+  skip_around_action :set_current_user, except: [:collection_parent_name, :owned_tag_sets, :site_skins]
   skip_before_action :sanitize_ac_params # can we dare!
 
   #### DO WE NEED THIS AT ALL? IF IT FIRES WITHOUT A TERM AND 500s BECAUSE USER DID SOMETHING WACKY SO WHAT
@@ -21,13 +21,9 @@ class AutocompleteController < ApplicationController
 
   # PSEUDS
   def pseud
-    if params[:term].blank?
-      # get the user's own pseuds
-      set_current_user
-      render_output(current_user.pseuds.collect(&:byline))
-    else
-      render_output(Pseud.autocomplete_lookup(search_param: params[:term], autocomplete_prefix: "autocomplete_pseud").map {|res| Pseud.fullname_from_autocomplete(res)})
-    end
+    return if params[:term].blank?
+
+    render_output(Pseud.autocomplete_lookup(search_param: params[:term], autocomplete_prefix: "autocomplete_pseud").map { |res| Pseud.fullname_from_autocomplete(res) })
   end
 
   ## TAGS
@@ -92,7 +88,7 @@ class AutocompleteController < ApplicationController
     raise "Redshirt: Attempted to constantize invalid class initialize noncanonical_tag #{params[:type].classify}" unless Tag::TYPES.include?(params[:type].classify)
 
     tag_class = params[:type].classify.constantize
-    one_tag = tag_class.find_by(canonical: false, name: params[:term])
+    one_tag = tag_class.find_by(canonical: false, name: params[:term]) if params[:term].present?
     # If there is an exact match in the database, ensure it is the first thing suggested.
     match = if one_tag
               [one_tag.name]
@@ -115,7 +111,7 @@ class AutocompleteController < ApplicationController
         body: { size: "100", query: { bool: { filter: [{ match: { tag_type: params[:type].capitalize } }, { match: { canonical: false } }], must: search_list } } }
       )
       render_output((match + search_results["hits"]["hits"].first(10).map { |t| t["_source"]["name"] }).uniq)
-    rescue Elasticsearch::Transport::Transport::Errors::BadRequest
+    rescue Elastic::Transport::Transport::Errors::BadRequest
       render_output(match)
     end
   end

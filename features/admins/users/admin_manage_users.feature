@@ -84,3 +84,47 @@ Feature: Admin Actions to manage users
       And I should see "Invitation: Created without invitation"
     When I go to the user administration page for "user2"
     Then I should see the invitation id for the user "user2"
+
+  Scenario: Admins can view past emails and usernames
+    Given the following activated user exists
+      | login | email      |
+      | cats  | d@fake.com |
+      And I am logged in as "cats"
+      And I want to edit my profile
+      And I change my email to "new@example.com"
+      And all emails have been delivered
+      And I change my username to "new_user"
+    When I am logged in as a super admin
+      And I go to the user administration page for "new_user"
+    Then I should see "Past email: d@fake.com" within ".meta"
+      And I should see "Past username: cats" within ".meta"
+    When I am logged in as a "translation" admin
+      And I go to the user administration page for "new_user"
+    Then I should not see "Past email: d@fake.com"
+      And I should not see "Past username: cats"
+
+  Scenario: An admin can access a user's creations from their administration page
+    Given there is 1 user creation per page
+      And the user "lurker" exists and is activated
+      And I am logged in as "troll"
+      And I post the work "Creepy Gift"
+      And I post the work "NFW"
+      And I post the comment "Neener" on the work "Creepy Gift"
+    When I am logged in as a "support" admin
+      And I go to the user administration page for "lurker"
+    Then the page should have a dashboard sidebar
+      And I should not see "Creations"
+    When I am logged in as a "policy_and_abuse" admin
+      And I go to the user administration page for "lurker"
+      And I follow "Creations"
+    Then I should see "Works and Comments by lurker"
+      And I should see "This user has no works or comments."
+      And the page should have a dashboard sidebar
+    When I go to the user administration page for "troll"
+      And I follow "Creations"
+    Then I should see "Works and Comments by troll"
+      And I should see "1 - 1 of 2 Works" within "#works-summary"
+      And I should see "Creepy Gift" within "#works-summary"
+      And I should see "1 Comment" within "#comments-summary"
+      And I should see "Comment on the work Creepy Gift" within "#comments-summary"
+      And I should see "<p>Neener</p>" within "#comments-summary"
